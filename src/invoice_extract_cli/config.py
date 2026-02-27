@@ -23,7 +23,11 @@ class ResolvedCliSettings:
     locale: str
     max_pages: int
     ocr_mode: str
-    pretty: bool
+    dry_run: bool
+    rename: bool
+    filename_separator: str
+    filename_suffix: str
+    filename_date_separator: str
     timeout_seconds: int
     debug: bool
 
@@ -35,7 +39,11 @@ def resolve_cli_settings(
     locale: str | None = None,
     max_pages: int | None = None,
     ocr_mode: str | None = None,
-    pretty: bool | None = None,
+    dry_run: bool | None = None,
+    rename: bool | None = None,
+    filename_separator: str | None = None,
+    filename_suffix: str | None = None,
+    filename_date_separator: str | None = None,
     timeout_seconds: int | None = None,
     debug: bool | None = None,
 ) -> ResolvedCliSettings:
@@ -48,7 +56,11 @@ def resolve_cli_settings(
         "locale": "pl",
         "max_pages": 3,
         "ocr_mode": "auto",
-        "pretty": False,
+        "dry_run": False,
+        "rename": False,
+        "filename_separator": "_",
+        "filename_suffix": "",
+        "filename_date_separator": "-",
         "timeout_seconds": 30,
         "debug": False,
     }
@@ -66,8 +78,16 @@ def resolve_cli_settings(
         cli_overrides["max_pages"] = max_pages
     if ocr_mode is not None:
         cli_overrides["ocr_mode"] = ocr_mode
-    if pretty is not None:
-        cli_overrides["pretty"] = pretty
+    if dry_run is not None:
+        cli_overrides["dry_run"] = dry_run
+    if rename is not None:
+        cli_overrides["rename"] = rename
+    if filename_separator is not None:
+        cli_overrides["filename_separator"] = filename_separator
+    if filename_suffix is not None:
+        cli_overrides["filename_suffix"] = filename_suffix
+    if filename_date_separator is not None:
+        cli_overrides["filename_date_separator"] = filename_date_separator
     if timeout_seconds is not None:
         cli_overrides["timeout_seconds"] = timeout_seconds
     if debug is not None:
@@ -133,8 +153,16 @@ def _read_config_files(config_paths: list[Path]) -> dict[str, object]:
         values["max_pages"] = _parse_int(section.get("max_pages", fallback=""), "max_pages")
     if "ocr_mode" in section:
         values["ocr_mode"] = section.get("ocr_mode", fallback="").strip()
-    if "pretty" in section:
-        values["pretty"] = _parse_bool(section.get("pretty", fallback=""), "pretty")
+    if "dry_run" in section:
+        values["dry_run"] = _parse_bool(section.get("dry_run", fallback=""), "dry_run")
+    if "rename" in section:
+        values["rename"] = _parse_bool(section.get("rename", fallback=""), "rename")
+    if "filename_separator" in section:
+        values["filename_separator"] = section.get("filename_separator", fallback="").strip()
+    if "filename_suffix" in section:
+        values["filename_suffix"] = section.get("filename_suffix", fallback="")
+    if "filename_date_separator" in section:
+        values["filename_date_separator"] = section.get("filename_date_separator", fallback="").strip()
     if "timeout_seconds" in section:
         values["timeout_seconds"] = _parse_int(section.get("timeout_seconds", fallback=""), "timeout_seconds")
     if "debug" in section:
@@ -158,8 +186,16 @@ def _env_overrides() -> dict[str, object]:
         values["max_pages"] = _parse_int(env["INVOICE_EXTRACT_MAX_PAGES"], "INVOICE_EXTRACT_MAX_PAGES")
     if env.get("INVOICE_EXTRACT_OCR_MODE") is not None:
         values["ocr_mode"] = env["INVOICE_EXTRACT_OCR_MODE"]
-    if env.get("INVOICE_EXTRACT_PRETTY") is not None:
-        values["pretty"] = _parse_bool(env["INVOICE_EXTRACT_PRETTY"], "INVOICE_EXTRACT_PRETTY")
+    if env.get("INVOICE_EXTRACT_DRY_RUN") is not None:
+        values["dry_run"] = _parse_bool(env["INVOICE_EXTRACT_DRY_RUN"], "INVOICE_EXTRACT_DRY_RUN")
+    if env.get("INVOICE_EXTRACT_RENAME") is not None:
+        values["rename"] = _parse_bool(env["INVOICE_EXTRACT_RENAME"], "INVOICE_EXTRACT_RENAME")
+    if env.get("INVOICE_EXTRACT_FILENAME_SEPARATOR") is not None:
+        values["filename_separator"] = env["INVOICE_EXTRACT_FILENAME_SEPARATOR"]
+    if env.get("INVOICE_EXTRACT_FILENAME_SUFFIX") is not None:
+        values["filename_suffix"] = env["INVOICE_EXTRACT_FILENAME_SUFFIX"]
+    if env.get("INVOICE_EXTRACT_FILENAME_DATE_SEPARATOR") is not None:
+        values["filename_date_separator"] = env["INVOICE_EXTRACT_FILENAME_DATE_SEPARATOR"]
     if env.get("INVOICE_EXTRACT_TIMEOUT_SECONDS") is not None:
         values["timeout_seconds"] = _parse_int(
             env["INVOICE_EXTRACT_TIMEOUT_SECONDS"],
@@ -188,6 +224,10 @@ def _validate_and_normalize(values: dict[str, object]) -> dict[str, object]:
     if ocr_mode not in {"auto", "gemini"}:
         raise ConfigError("ocr_mode must be 'auto' or 'gemini'")
 
+    filename_separator = _normalize_filename_separator(values.get("filename_separator", "_"))
+    filename_date_separator = _normalize_filename_date_separator(values.get("filename_date_separator", "-"))
+    filename_suffix = _normalize_filename_suffix(values.get("filename_suffix", ""))
+
     timeout_seconds = int(values.get("timeout_seconds", 0))
     if timeout_seconds < 1:
         raise ConfigError("timeout_seconds must be >= 1")
@@ -198,7 +238,11 @@ def _validate_and_normalize(values: dict[str, object]) -> dict[str, object]:
         "locale": locale,
         "max_pages": max_pages,
         "ocr_mode": ocr_mode,
-        "pretty": bool(values.get("pretty", False)),
+        "dry_run": bool(values.get("dry_run", False)),
+        "rename": bool(values.get("rename", False)),
+        "filename_separator": filename_separator,
+        "filename_suffix": filename_suffix,
+        "filename_date_separator": filename_date_separator,
         "timeout_seconds": timeout_seconds,
         "debug": bool(values.get("debug", False)),
     }
@@ -225,3 +269,46 @@ def _parse_int(value: str, field_name: str) -> int:
         return int(value.strip())
     except ValueError as exc:
         raise ConfigError(f"Invalid integer for {field_name}: {value!r}") from exc
+
+
+def _normalize_filename_separator(value: object) -> str:
+    text = str(value)
+    if text == " ":
+        return " "
+    raw = text.strip().lower()
+    mapping = {
+        "underscore": "_",
+        "_": "_",
+        "dash": "-",
+        "hyphen": "-",
+        "-": "-",
+        "space": " ",
+        " ": " ",
+    }
+    if raw not in mapping:
+        raise ConfigError("filename_separator must be one of: underscore, dash, space, _, -")
+    return mapping[raw]
+
+
+def _normalize_filename_date_separator(value: object) -> str:
+    raw = str(value).strip().lower()
+    mapping = {
+        "dash": "-",
+        "hyphen": "-",
+        "-": "-",
+        "dot": ".",
+        ".": ".",
+        "underscore": "_",
+        "_": "_",
+    }
+    if raw not in mapping:
+        raise ConfigError("filename_date_separator must be one of: dash, dot, underscore, -, ., _")
+    return mapping[raw]
+
+
+def _normalize_filename_suffix(value: object) -> str:
+    text = str(value)
+    cleaned = text.strip()
+    cleaned = cleaned.replace("/", "-").replace("\\", "-")
+    cleaned = "".join(ch for ch in cleaned if ch >= " " and ch != "\x7f")
+    return cleaned

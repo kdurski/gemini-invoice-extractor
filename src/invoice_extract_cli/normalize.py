@@ -114,10 +114,89 @@ def count_words(value: str | None) -> int:
 
 
 def make_filename_stub(invoice_date: str | None, short_description: str | None) -> str:
-    date_part = invoice_date or "unknown-date"
+    return make_filename_stub_with_options(
+        invoice_date=invoice_date,
+        short_description=short_description,
+    )
+
+
+def make_filename_stub_with_options(
+    invoice_date: str | None,
+    short_description: str | None,
+    *,
+    filename_separator: str = "_",
+    filename_suffix: str = "",
+    filename_date_separator: str = "-",
+) -> str:
+    sep = normalize_filename_separator(filename_separator)
+    date_sep = normalize_filename_date_separator(filename_date_separator)
+    date_part = format_invoice_date_for_filename(invoice_date, date_separator=date_sep)
+
     desc = sanitize_short_description(short_description)
-    desc_part = desc.replace(" ", "_")
-    return f"{date_part}_{desc_part}"
+    desc_words = [w for w in desc.split() if w]
+    desc_part = sep.join(desc_words) if desc_words else "item"
+
+    base = f"{date_part}{sep}{desc_part}"
+    suffix = sanitize_filename_suffix(filename_suffix)
+    if suffix:
+        if suffix.startswith(sep) or suffix.startswith(" "):
+            return f"{base}{suffix}"
+        return f"{base}{sep}{suffix}"
+    return base
+
+
+def format_invoice_date_for_filename(invoice_date: str | None, *, date_separator: str = "-") -> str:
+    if not invoice_date:
+        return "unknown-date"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", invoice_date):
+        return invoice_date.replace("-", date_separator)
+    return invoice_date
+
+
+def normalize_filename_separator(value: str | None) -> str:
+    if value is None:
+        raw = "_"
+    else:
+        text = str(value)
+        if text == " ":
+            return " "
+        raw = text.strip().lower()
+    mapping = {
+        "underscore": "_",
+        "_": "_",
+        "dash": "-",
+        "hyphen": "-",
+        "-": "-",
+        "space": " ",
+        " ": " ",
+    }
+    return mapping.get(raw, "_")
+
+
+def normalize_filename_date_separator(value: str | None) -> str:
+    raw = (value or "-").strip().lower()
+    mapping = {
+        "dash": "-",
+        "hyphen": "-",
+        "-": "-",
+        "dot": ".",
+        ".": ".",
+        "underscore": "_",
+        "_": "_",
+    }
+    return mapping.get(raw, "-")
+
+
+def sanitize_filename_suffix(value: str | None) -> str:
+    if value is None:
+        return ""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    # Keep user intent (e.g., "(KD)") but strip path separators/control chars.
+    cleaned = cleaned.replace("/", "-").replace("\\", "-")
+    cleaned = "".join(ch for ch in cleaned if ch >= " " and ch != "\x7f")
+    return cleaned
 
 
 def _ascii_fold(value: str) -> str:
